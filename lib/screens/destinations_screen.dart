@@ -11,7 +11,7 @@ import '../services/geocoding_autocomplete_service.dart';
 import '../widgets/destination_item.dart';
 import '../widgets/improved_autocomplete_field.dart';
 
-const kGoogleApiKey = "AIzaSyAR2UG7GlkN5zQyUOMSTOKVDSFo15bg6rQ";
+const kGoogleApiKey = "";
 
 class DestinationsScreen extends StatefulWidget {
   @override
