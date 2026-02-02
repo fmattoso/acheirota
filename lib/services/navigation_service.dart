@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/navigation_session.dart';
@@ -23,14 +24,8 @@ class NavigationService {
   VoidCallback? onNavigationStarted;
   VoidCallback? onNavigationEnded;
 
-  // Para cálculo de heading
-  LatLng? _lastPosition;
-  double? _lastKnownHeading;
-  List<LatLng> _positionHistory = [];
-
   // Constantes
   static const double DEVIATION_THRESHOLD = 200.0;
-  static const int HISTORY_SIZE = 10;
 
   // Inicializar serviço
   NavigationService() {
@@ -55,11 +50,6 @@ class NavigationService {
       // Parar navegação anterior se existir
       await stopNavigation();
 
-      // Limpar histórico
-      _positionHistory.clear();
-      _lastPosition = null;
-      _lastKnownHeading = null;
-
       // Inicializar sessão
       _currentSession = NavigationSession(
         startTime: DateTime.now(),
@@ -79,6 +69,10 @@ class NavigationService {
       // Notificar início
       if (onNavigationStarted != null) {
         onNavigationStarted!();
+      }
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
       }
 
       // Iniciar monitoramento
@@ -147,32 +141,24 @@ class NavigationService {
       final currentLatLng = LatLng(position.latitude, position.longitude);
       final speedKmh = (position.speed * 3.6).abs();
 
-      // Adicionar ao histórico
-      _positionHistory.add(currentLatLng);
-      if (_positionHistory.length > HISTORY_SIZE) {
-        _positionHistory.removeAt(0);
-      }
-
-      // Calcular heading
+      // Obter heading do sensor ou calcular
       double? heading = position.heading;
 
-      // Se heading não disponível, calcular com base no movimento
-      if ((heading == null || heading == 0.0 || heading.isNaN) && _lastPosition != null) {
-        heading = _calculateHeadingFromMovement(_lastPosition!, currentLatLng);
+      // Se heading não disponível ou inválido
+      if (heading == null || heading.isNaN || heading == 0.0) {
+        // Calcular heading baseado no movimento usando as últimas posições
+        heading = _calculateHeadingFromHistory();
       }
 
-      _lastKnownHeading = heading ?? _lastKnownHeading;
-      _lastPosition = currentLatLng;
-
-      // Atualizar sessão
-      _updateSession(currentLatLng, speedKmh);
+      // Atualizar sessão com os novos dados
+      _updateSession(currentLatLng, speedKmh, heading);
 
       // Notificar atualização de posição (COM HEADING)
       if (onPositionUpdate != null) {
-        onPositionUpdate!(currentLatLng, speedKmh, _lastKnownHeading);
+        onPositionUpdate!(currentLatLng, speedKmh, heading);
       }
 
-      // Verificar desvio periodicamente (não a cada update para performance)
+      // Verificar desvio periodicamente
       final now = DateTime.now();
       if (_currentSession!.lastUpdate.isBefore(now.subtract(Duration(seconds: 5)))) {
         _checkRouteDeviation(currentLatLng);
@@ -183,7 +169,30 @@ class NavigationService {
     }
   }
 
-  double _calculateHeadingFromMovement(LatLng from, LatLng to) {
+  double? _calculateHeadingFromHistory() {
+    if (_currentSession == null || _currentSession!.positions.length < 2) {
+      return _currentSession?.currentHeading;
+    }
+
+    try {
+      // Pegar as últimas 2 posições válidas
+      final positions = _currentSession!.positions;
+      if (positions.length < 2) return null;
+
+      final lastPositions = positions.reversed.take(2).toList();
+      if (lastPositions.length < 2) return null;
+
+      final p1 = lastPositions[1].position;
+      final p2 = lastPositions[0].position;
+
+      return _calculateHeadingBetweenPoints(p1, p2);
+    } catch (e) {
+      print('Erro ao calcular heading do histórico: $e');
+      return _currentSession?.currentHeading;
+    }
+  }
+
+  double _calculateHeadingBetweenPoints(LatLng from, LatLng to) {
     try {
       final lat1 = from.latitude * (pi / 180);
       final lon1 = from.longitude * (pi / 180);
@@ -202,19 +211,22 @@ class NavigationService {
 
       return heading;
     } catch (e) {
-      print('Erro ao calcular heading: $e');
+      print('Erro ao calcular heading entre pontos: $e');
       return 0.0;
     }
   }
 
-  void _updateSession(LatLng currentPosition, double speed) {
+  void _updateSession(LatLng currentPosition, double speed, double? heading) {
     if (_currentSession == null) return;
 
     try {
-      // Adicionar posição
-      _currentSession!.addPosition(currentPosition);
+      // Adicionar posição com timestamp
+      _currentSession!.addPosition(currentPosition, speed: speed, heading: heading);
+
+      // Atualizar campos da sessão
       _currentSession!.currentPosition = currentPosition;
       _currentSession!.currentSpeed = speed;
+      _currentSession!.currentHeading = heading;
 
       // Calcular distância percorrida
       double distanceTraveled = _calculateDistanceTraveled();
@@ -224,6 +236,9 @@ class NavigationService {
       double remainingDistance = max(0, _currentSession!.totalDistance - distanceTraveled);
       _currentSession!.remainingDistance = remainingDistance;
 
+      // Calcular velocidade média
+      _currentSession!.averageSpeed = _currentSession!.calculateAverageSpeedFromHistory();
+
       // Calcular tempo restante
       Duration remainingDuration = _calculateRemainingDuration(
         remainingDistance,
@@ -231,9 +246,6 @@ class NavigationService {
         _currentSession!.averageSpeed,
       );
       _currentSession!.remainingDuration = remainingDuration;
-
-      // Calcular velocidade média
-      _currentSession!.averageSpeed = _calculateAverageSpeed(speed);
 
       // Atualizar timestamp
       _currentSession!.lastUpdate = DateTime.now();
@@ -256,40 +268,20 @@ class NavigationService {
       final positions = _currentSession!.positions;
 
       for (int i = 1; i < positions.length; i++) {
+        final p1 = positions[i-1].position;
+        final p2 = positions[i].position;
+
         total += Geolocator.distanceBetween(
-          positions[i-1].latitude,
-          positions[i-1].longitude,
-          positions[i].latitude,
-          positions[i].longitude,
+          p1.latitude,
+          p1.longitude,
+          p2.latitude,
+          p2.longitude,
         );
       }
       return total;
     } catch (e) {
       print('Erro ao calcular distância percorrida: $e');
       return 0;
-    }
-  }
-
-  double _calculateAverageSpeed(double currentSpeed) {
-    if (_currentSession == null || _currentSession!.positions.length < 2) {
-      return currentSpeed;
-    }
-
-    try {
-      final positions = _currentSession!.positions;
-      final firstTime = positions.first.timestamp ?? _currentSession!.startTime;
-      final lastTime = positions.last.timestamp ?? DateTime.now();
-
-      final totalTime = lastTime.difference(firstTime).inSeconds;
-      if (totalTime <= 0) return currentSpeed;
-
-      final totalDistance = _calculateDistanceTraveled();
-      final averageSpeedMs = totalDistance / totalTime;
-
-      return averageSpeedMs * 3.6; // Converter para km/h
-    } catch (e) {
-      print('Erro ao calcular velocidade média: $e');
-      return currentSpeed;
     }
   }
 
@@ -362,13 +354,16 @@ class NavigationService {
 
     // Verificar desvio a cada 15 segundos
     _deviationCheckTimer = Timer.periodic(Duration(seconds: 15), (timer) {
-      if (!_isNavigating || _isPaused || _lastPosition == null) return;
-      _checkRouteDeviation(_lastPosition!);
+      if (!_isNavigating || _isPaused || _currentSession?.currentPosition == null) return;
+      _checkRouteDeviation(_currentSession!.currentPosition!);
     });
 
     // Atualizar UI a cada 3 segundos
     _updateTimer = Timer.periodic(Duration(seconds: 3), (timer) {
       if (!_isNavigating || _isPaused || _currentSession == null) return;
+
+      // Calcular heading médio
+      _currentSession!.currentHeading = _currentSession!.calculateAverageHeading();
 
       if (onSessionUpdate != null) {
         onSessionUpdate!(_currentSession!);
@@ -461,9 +456,6 @@ class NavigationService {
 
     // Limpar estado
     _currentRoute.clear();
-    _positionHistory.clear();
-    _lastPosition = null;
-    _lastKnownHeading = null;
 
     // Notificar término
     if (onNavigationEnded != null) {
@@ -478,5 +470,5 @@ class NavigationService {
   bool get isPaused => _isPaused;
   NavigationSession? get currentSession => _currentSession;
   List<LatLng> get currentRoute => _currentRoute;
-  double? get currentHeading => _lastKnownHeading;
+  double? get currentHeading => _currentSession?.currentHeading;
 }
