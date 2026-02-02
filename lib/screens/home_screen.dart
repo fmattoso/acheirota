@@ -23,6 +23,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final LocationService _locationService = LocationService();
   final StorageService _storageService = StorageService();
   final NavigationService _navigationService = NavigationService();
+  double _currentBearing = 0.0;
+  bool _isMapRotated = false;
+  double _mapRotation = 0.0;
 
   late GoogleMapController _mapController;
   Position? _currentPosition;
@@ -56,7 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _setupNavigationListeners() {
-    _navigationService.onPositionUpdate = (position, speed) {
+    _navigationService.onPositionUpdate = (position, speed, heading) {
       setState(() {
         _currentPosition = Position(
           latitude: position.latitude,
@@ -65,12 +68,13 @@ class _HomeScreenState extends State<HomeScreen> {
           accuracy: 0,
           altitudeAccuracy: 0,
           altitude: 0,
-          heading: 0,
+          heading: heading ?? 0,
           headingAccuracy: 0,
           speed: speed / 3.6, // converter km/h para m/s
           speedAccuracy: 0,
         );
         _currentSpeed = speed;
+        _currentBearing = heading ?? 0; // Armazene o bearing atual
 
         // Atualizar marcador de posição atual
         _updateCurrentLocationMarker();
@@ -78,7 +82,14 @@ class _HomeScreenState extends State<HomeScreen> {
         // Ajustar câmera se navegando
         if (_isNavigating) {
           _mapController.animateCamera(
-            CameraUpdate.newLatLngZoom(position, 16),
+            CameraUpdate.newCameraPosition(
+              CameraPosition(
+                target: position,
+                zoom: 16,
+                bearing: _isMapRotated ? _currentBearing : 0, // Aplica rotação se ativada
+                tilt: _isMapRotated ? 45 : 0, // Inclinação para efeito 3D
+              ),
+            ),
           );
         }
       });
@@ -132,6 +143,15 @@ class _HomeScreenState extends State<HomeScreen> {
         // Remover marcador antigo
         _markers.removeWhere((marker) => marker.markerId.value == 'current_location');
 
+        // Criar bitmap personalizado para marcador de navegação
+        BitmapDescriptor? customIcon;
+
+        // Se estiver navegando com rotação, usar ícone com seta
+        if (_isNavigating && _isMapRotated) {
+          // Você precisará criar um ícone personalizado
+          // Por enquanto usamos o padrão com rotação
+        }
+
         // Adicionar novo marcador
         _markers.add(
           Marker(
@@ -144,10 +164,11 @@ class _HomeScreenState extends State<HomeScreen> {
               title: 'Minha Localização',
               snippet: _currentAddress,
             ),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
+            icon: customIcon ?? BitmapDescriptor.defaultMarkerWithHue(
               BitmapDescriptor.hueBlue,
             ),
-            rotation: _currentPosition?.heading ?? 0,
+            rotation: _currentBearing, // Rotacionar o marcador conforme o heading
+            anchor: Offset(0.5, 0.5), // Centralizar a rotação
           ),
         );
       });
@@ -600,13 +621,32 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         if (_isNavigating)
           FloatingActionButton.small(
+            onPressed: _toggleMapRotation,
+            child: Icon(
+              _isMapRotated ? Icons.navigation : Icons.explore,
+              color: _isMapRotated ? Colors.blue : Colors.black,
+            ),
+            tooltip: _isMapRotated ? 'Mapa Norte' : 'Orientar pela Direção',
+            heroTag: 'rotation_fab',
+            backgroundColor: _isMapRotated ? Colors.blue[100] : Colors.white,
+          ),
+        if (_isNavigating)
+          SizedBox(height: 10),
+        if (_isNavigating)
+          FloatingActionButton.small(
             onPressed: () {
-              // Alternar entre visão da rota e tracking
               if (_currentPosition != null) {
                 _mapController.animateCamera(
-                  CameraUpdate.newLatLngZoom(
-                    LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-                    16,
+                  CameraUpdate.newCameraPosition(
+                    CameraPosition(
+                      target: LatLng(
+                        _currentPosition!.latitude,
+                        _currentPosition!.longitude,
+                      ),
+                      zoom: 16,
+                      bearing: _isMapRotated ? _currentBearing : 0,
+                      tilt: _isMapRotated ? 45 : 0,
+                    ),
                   ),
                 );
               }
@@ -640,5 +680,27 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ],
     );
+  }
+
+  void _toggleMapRotation() {
+    setState(() {
+      _isMapRotated = !_isMapRotated;
+    });
+
+    if (_currentPosition != null) {
+      _mapController.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+            ),
+            zoom: 16,
+            bearing: _isMapRotated ? _currentBearing : 0,
+            tilt: _isMapRotated ? 45 : 0,
+          ),
+        ),
+      );
+    }
   }
 }

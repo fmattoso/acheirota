@@ -2,284 +2,481 @@ import 'dart:async';
 import 'dart:math';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:sensors_plus/sensors_plus.dart';
 import '../models/navigation_session.dart';
 
 class NavigationService {
-  final LocationSettings _locationSettings = LocationSettings(
-    accuracy: LocationAccuracy.bestForNavigation,
-    distanceFilter: 10, // metros
-    timeLimit: Duration(seconds: 30),
-  );
-
+  // Stream de posição
   StreamSubscription<Position>? _positionStream;
-  StreamSubscription<AccelerometerEvent>? _accelerometerStream;
-  NavigationSession? _currentSession;
+  Timer? _deviationCheckTimer;
   Timer? _updateTimer;
+
+  // Estado da navegação
   bool _isNavigating = false;
+  bool _isPaused = false;
+  NavigationSession? _currentSession;
+  List<LatLng> _currentRoute = [];
 
   // Callbacks
-  Function(LatLng position, double speed)? onPositionUpdate;
+  Function(LatLng position, double speed, double? heading)? onPositionUpdate;
   Function(double deviation)? onRouteDeviation;
   Function(NavigationSession session)? onSessionUpdate;
-  Function()? onNavigationStarted;
-  Function()? onNavigationEnded;
+  VoidCallback? onNavigationStarted;
+  VoidCallback? onNavigationEnded;
 
-  // Configurações
-  double maxAllowedDeviation = 100.0; // metros máximo de desvio
-  int updateInterval = 2; // segundos entre atualizações
-
-  // Histórico de posições para cálculos
+  // Para cálculo de heading
+  LatLng? _lastPosition;
+  double? _lastKnownHeading;
   List<LatLng> _positionHistory = [];
-  List<double> _speedHistory = [];
+
+  // Constantes
+  static const double DEVIATION_THRESHOLD = 200.0;
+  static const int HISTORY_SIZE = 10;
+
+  // Inicializar serviço
+  NavigationService() {
+    print('NavigationService inicializado');
+  }
 
   Future<void> startNavigation({
     required List<LatLng> route,
     required double totalDistance,
-    required int totalDuration,
+    required Duration totalDuration,
     required double fuelConsumption,
   }) async {
-    if (_isNavigating) {
+    try {
+      print('Iniciando navegação...');
+      print('Rota com ${route.length} pontos');
+      print('Distância total: ${totalDistance}m');
+
+      if (route.length < 2) {
+        throw Exception('Rota deve ter pelo menos dois pontos');
+      }
+
+      // Parar navegação anterior se existir
       await stopNavigation();
-    }
 
-    // Criar nova sessão
-    _currentSession = NavigationSession(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      plannedRoute: route,
-      totalPlannedDistance: totalDistance,
-      totalPlannedDuration: totalDuration,
-      fuelConsumption: fuelConsumption,
-    );
+      // Limpar histórico
+      _positionHistory.clear();
+      _lastPosition = null;
+      _lastKnownHeading = null;
 
-    _currentSession!.isActive = true;
-    _isNavigating = true;
-
-    // Iniciar stream de localização
-    await _startPositionTracking();
-
-    // Iniciar detecção de movimento
-    await _startMotionDetection();
-
-    // Iniciar timer para atualizações
-    _startUpdateTimer();
-
-    // Notificar início
-    onNavigationStarted?.call();
-    onSessionUpdate?.call(_currentSession!);
-
-    print('🚗 Navegação iniciada');
-  }
-
-  Future<void> _startPositionTracking() async {
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: _locationSettings,
-    ).listen((Position position) {
-      _handleNewPosition(position);
-    });
-  }
-
-  Future<void> _startMotionDetection() async {
-    _accelerometerStream = accelerometerEvents.listen((AccelerometerEvent event) {
-      // Detectar movimento significativo
-      final acceleration = sqrt(
-          pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2)
+      // Inicializar sessão
+      _currentSession = NavigationSession(
+        startTime: DateTime.now(),
+        routePoints: route,
+        totalDistance: totalDistance,
+        totalDuration: totalDuration,
+        fuelConsumption: fuelConsumption,
+        remainingDistance: totalDistance,
+        remainingDuration: totalDuration,
+        lastUpdate: DateTime.now(),
       );
 
-      // Se aceleração acima de threshold, está em movimento
-      if (acceleration > 2.0 && _currentSession != null && _currentSession!.isPaused) {
-        _currentSession!.resume();
+      _currentRoute = List.from(route);
+      _isNavigating = true;
+      _isPaused = false;
+
+      // Notificar início
+      if (onNavigationStarted != null) {
+        onNavigationStarted!();
       }
-    });
+
+      // Iniciar monitoramento
+      await _startPositionMonitoring();
+
+      // Iniciar verificações periódicas
+      _startPeriodicChecks();
+
+      print('Navegação iniciada com sucesso');
+
+    } catch (e) {
+      print('Erro ao iniciar navegação: $e');
+      rethrow;
+    }
   }
 
-  void _startUpdateTimer() {
-    _updateTimer = Timer.periodic(Duration(seconds: updateInterval), (timer) {
-      if (_currentSession != null && _currentSession!.isActive && !_currentSession!.isPaused) {
-        _updateNavigationMetrics();
-        onSessionUpdate?.call(_currentSession!);
+  Future<void> _startPositionMonitoring() async {
+    try {
+      print('Iniciando monitoramento de posição...');
+
+      // Verificar permissões
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Serviço de localização desativado');
       }
-    });
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          throw Exception('Permissão de localização negada');
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        throw Exception('Permissão de localização permanentemente negada');
+      }
+
+      // Configurar stream de posição
+      _positionStream = Geolocator.getPositionStream(
+        locationSettings: LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 5, // Atualizar a cada 5 metros
+        ),
+      ).listen(
+            (Position position) => _handlePositionUpdate(position),
+        onError: (error) {
+          print('Erro no stream de posição: $error');
+          _restartPositionMonitoring();
+        },
+        cancelOnError: false,
+      );
+
+      print('Monitoramento de posição iniciado');
+
+    } catch (e) {
+      print('Erro ao iniciar monitoramento: $e');
+      rethrow;
+    }
   }
 
-  void _handleNewPosition(Position position) {
-    if (_currentSession == null || !_currentSession!.isActive) return;
+  void _handlePositionUpdate(Position position) {
+    if (!_isNavigating || _isPaused || _currentSession == null) return;
 
-    final newPosition = LatLng(position.latitude, position.longitude);
-    final speed = position.speed * 3.6; // converter m/s para km/h
+    try {
+      final currentLatLng = LatLng(position.latitude, position.longitude);
+      final speedKmh = (position.speed * 3.6).abs();
 
-    // Atualizar sessão
-    _currentSession!.updatePosition(newPosition, speed);
+      // Adicionar ao histórico
+      _positionHistory.add(currentLatLng);
+      if (_positionHistory.length > HISTORY_SIZE) {
+        _positionHistory.removeAt(0);
+      }
 
-    // Adicionar ao histórico
-    _positionHistory.add(newPosition);
-    _speedHistory.add(speed);
+      // Calcular heading
+      double? heading = position.heading;
 
-    // Manter histórico limitado (últimos 60 segundos)
-    if (_positionHistory.length > 30) { // 30 posições * 2 segundos = 60s
-      _positionHistory.removeAt(0);
-      _speedHistory.removeAt(0);
+      // Se heading não disponível, calcular com base no movimento
+      if ((heading == null || heading == 0.0 || heading.isNaN) && _lastPosition != null) {
+        heading = _calculateHeadingFromMovement(_lastPosition!, currentLatLng);
+      }
+
+      _lastKnownHeading = heading ?? _lastKnownHeading;
+      _lastPosition = currentLatLng;
+
+      // Atualizar sessão
+      _updateSession(currentLatLng, speedKmh);
+
+      // Notificar atualização de posição (COM HEADING)
+      if (onPositionUpdate != null) {
+        onPositionUpdate!(currentLatLng, speedKmh, _lastKnownHeading);
+      }
+
+      // Verificar desvio periodicamente (não a cada update para performance)
+      final now = DateTime.now();
+      if (_currentSession!.lastUpdate.isBefore(now.subtract(Duration(seconds: 5)))) {
+        _checkRouteDeviation(currentLatLng);
+      }
+
+    } catch (e) {
+      print('Erro ao processar atualização de posição: $e');
+    }
+  }
+
+  double _calculateHeadingFromMovement(LatLng from, LatLng to) {
+    try {
+      final lat1 = from.latitude * (pi / 180);
+      final lon1 = from.longitude * (pi / 180);
+      final lat2 = to.latitude * (pi / 180);
+      final lon2 = to.longitude * (pi / 180);
+
+      final dLon = lon2 - lon1;
+
+      final y = sin(dLon) * cos(lat2);
+      final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+
+      double heading = atan2(y, x) * (180 / pi);
+
+      // Normalizar para 0-360
+      heading = (heading + 360) % 360;
+
+      return heading;
+    } catch (e) {
+      print('Erro ao calcular heading: $e');
+      return 0.0;
+    }
+  }
+
+  void _updateSession(LatLng currentPosition, double speed) {
+    if (_currentSession == null) return;
+
+    try {
+      // Adicionar posição
+      _currentSession!.addPosition(currentPosition);
+      _currentSession!.currentPosition = currentPosition;
+      _currentSession!.currentSpeed = speed;
+
+      // Calcular distância percorrida
+      double distanceTraveled = _calculateDistanceTraveled();
+      _currentSession!.distanceTraveled = distanceTraveled;
+
+      // Calcular distância restante
+      double remainingDistance = max(0, _currentSession!.totalDistance - distanceTraveled);
+      _currentSession!.remainingDistance = remainingDistance;
+
+      // Calcular tempo restante
+      Duration remainingDuration = _calculateRemainingDuration(
+        remainingDistance,
+        speed,
+        _currentSession!.averageSpeed,
+      );
+      _currentSession!.remainingDuration = remainingDuration;
+
+      // Calcular velocidade média
+      _currentSession!.averageSpeed = _calculateAverageSpeed(speed);
+
+      // Atualizar timestamp
+      _currentSession!.lastUpdate = DateTime.now();
+
+      // Notificar atualização de sessão
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
+
+    } catch (e) {
+      print('Erro ao atualizar sessão: $e');
+    }
+  }
+
+  double _calculateDistanceTraveled() {
+    if (_currentSession == null || _currentSession!.positions.length < 2) return 0;
+
+    try {
+      double total = 0;
+      final positions = _currentSession!.positions;
+
+      for (int i = 1; i < positions.length; i++) {
+        total += Geolocator.distanceBetween(
+          positions[i-1].latitude,
+          positions[i-1].longitude,
+          positions[i].latitude,
+          positions[i].longitude,
+        );
+      }
+      return total;
+    } catch (e) {
+      print('Erro ao calcular distância percorrida: $e');
+      return 0;
+    }
+  }
+
+  double _calculateAverageSpeed(double currentSpeed) {
+    if (_currentSession == null || _currentSession!.positions.length < 2) {
+      return currentSpeed;
     }
 
-    // Verificar desvio da rota
-    _checkRouteDeviation(newPosition);
+    try {
+      final positions = _currentSession!.positions;
+      final firstTime = positions.first.timestamp ?? _currentSession!.startTime;
+      final lastTime = positions.last.timestamp ?? DateTime.now();
 
-    // Calcular distância percorrida desde última posição
-    if (_positionHistory.length > 1) {
-      final lastPosition = _positionHistory[_positionHistory.length - 2];
-      final distance = _calculateDistance(lastPosition, newPosition);
-      _currentSession!.addDistance(distance / 1000); // converter para km
+      final totalTime = lastTime.difference(firstTime).inSeconds;
+      if (totalTime <= 0) return currentSpeed;
+
+      final totalDistance = _calculateDistanceTraveled();
+      final averageSpeedMs = totalDistance / totalTime;
+
+      return averageSpeedMs * 3.6; // Converter para km/h
+    } catch (e) {
+      print('Erro ao calcular velocidade média: $e');
+      return currentSpeed;
     }
+  }
 
-    // Notificar atualização
-    onPositionUpdate?.call(newPosition, speed);
-    onSessionUpdate?.call(_currentSession!);
+  Duration _calculateRemainingDuration(
+      double remainingDistance,
+      double currentSpeed,
+      double averageSpeed,
+      ) {
+    try {
+      if (remainingDistance <= 0) return Duration.zero;
+
+      // Usar velocidade média se disponível, senão usar atual
+      double effectiveSpeed = averageSpeed > 0 ? averageSpeed : currentSpeed;
+      effectiveSpeed = max(effectiveSpeed, 5.0); // Mínimo 5 km/h
+
+      // Converter km/h para m/s
+      double speedMs = effectiveSpeed / 3.6;
+
+      // Calcular tempo em segundos
+      int seconds = (remainingDistance / speedMs).round();
+
+      return Duration(seconds: max(seconds, 0));
+    } catch (e) {
+      print('Erro ao calcular tempo restante: $e');
+      return Duration(minutes: 5); // Valor padrão
+    }
   }
 
   void _checkRouteDeviation(LatLng currentPosition) {
-    if (_currentSession == null || _currentSession!.plannedRoute.isEmpty) return;
+    if (_currentRoute.isEmpty || _currentSession == null) return;
 
-    // Encontrar ponto mais próximo na rota planejada
-    double minDistance = double.infinity;
-    LatLng nearestPoint = _currentSession!.plannedRoute.first;
+    try {
+      double minDistance = double.infinity;
 
-    for (var point in _currentSession!.plannedRoute) {
-      final distance = _calculateDistance(currentPosition, point);
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestPoint = point;
-      }
-    }
-
-    // Atualizar desvio máximo
-    if (minDistance > _currentSession!.maxDeviation) {
-      _currentSession!.maxDeviation = minDistance;
-    }
-
-    // Se desvio maior que permitido, notificar
-    if (minDistance > maxAllowedDeviation) {
-      onRouteDeviation?.call(minDistance);
-
-      // Auto-recalcular se desvio muito grande
-      if (minDistance > maxAllowedDeviation * 2) {
-        _triggerRecalculation();
-      }
-    }
-
-    print('📍 Distância até rota: ${minDistance.toStringAsFixed(1)}m');
-  }
-
-  void _updateNavigationMetrics() {
-    if (_currentSession == null || _positionHistory.length < 2) return;
-
-    // Calcular velocidade média recente (últimos 30 segundos)
-    if (_speedHistory.isNotEmpty) {
-      final recentSpeeds = _speedHistory.length > 10
-          ? _speedHistory.sublist(_speedHistory.length - 10)
-          : _speedHistory;
-
-      final avgRecentSpeed = recentSpeeds.reduce((a, b) => a + b) / recentSpeeds.length;
-
-      // Estimar tempo restante baseado na velocidade atual
-      if (avgRecentSpeed > 0) {
-        final remainingDist = _currentSession!.totalPlannedDistance - _currentSession!.totalActualDistance;
-        _currentSession!.remainingDistance = remainingDist;
-        _currentSession!.remainingTime = (remainingDist / avgRecentSpeed * 60).round();
-      }
-    }
-
-    // Verificar se chegou ao destino
-    _checkDestinationArrival();
-  }
-
-  void _checkDestinationArrival() {
-    if (_currentSession == null || _positionHistory.isEmpty) return;
-
-    final currentPosition = _positionHistory.last;
-    final destinations = _currentSession!.plannedRoute;
-
-    if (_currentSession!.currentDestinationIndex < destinations.length) {
-      final target = destinations[_currentSession!.currentDestinationIndex];
-      final distanceToTarget = _calculateDistance(currentPosition, target);
-
-      // Se está a menos de 50m do destino, considerar como chegada
-      if (distanceToTarget < 50) {
-        _currentSession!.currentDestinationIndex++;
-        print('✅ Chegou ao destino ${_currentSession!.currentDestinationIndex}');
-
-        // Se chegou ao último destino, finalizar navegação
-        if (_currentSession!.currentDestinationIndex >= destinations.length) {
-          _completeNavigation();
+      for (final point in _currentRoute) {
+        final distance = Geolocator.distanceBetween(
+          currentPosition.latitude,
+          currentPosition.longitude,
+          point.latitude,
+          point.longitude,
+        );
+        if (distance < minDistance) {
+          minDistance = distance;
         }
       }
+
+      // Verificar desvio
+      if (minDistance > DEVIATION_THRESHOLD) {
+        _currentSession!.status = NavigationStatus.deviated;
+
+        if (onRouteDeviation != null) {
+          onRouteDeviation!(minDistance);
+        }
+      } else if (_currentSession!.status == NavigationStatus.deviated) {
+        _currentSession!.status = NavigationStatus.inProgress;
+      }
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
+
+    } catch (e) {
+      print('Erro ao verificar desvio: $e');
     }
   }
 
-  void _triggerRecalculation() {
-    if (_currentSession == null) return;
-
-    _currentSession!.recalculate();
-    print('🔄 Recalculando rota (desvio detectado)');
-
-    // Aqui você chamaria seu DirectionsService para recalcular a rota
-    // from currentPosition to remaining destinations
-  }
-
-  void _completeNavigation() {
-    print('🏁 Navegação concluída!');
-
-    if (_currentSession != null) {
-      _currentSession!.end();
-      onSessionUpdate?.call(_currentSession!);
-      onNavigationEnded?.call();
-    }
-
-    stopNavigation();
-  }
-
-  Future<void> stopNavigation() async {
-    _isNavigating = false;
-
-    // Cancelar streams
-    await _positionStream?.cancel();
-    await _accelerometerStream?.cancel();
-    _positionStream = null;
-    _accelerometerStream = null;
-
-    // Cancelar timer
+  void _startPeriodicChecks() {
+    _deviationCheckTimer?.cancel();
     _updateTimer?.cancel();
-    _updateTimer = null;
 
-    // Limpar histórico
-    _positionHistory.clear();
-    _speedHistory.clear();
+    // Verificar desvio a cada 15 segundos
+    _deviationCheckTimer = Timer.periodic(Duration(seconds: 15), (timer) {
+      if (!_isNavigating || _isPaused || _lastPosition == null) return;
+      _checkRouteDeviation(_lastPosition!);
+    });
 
-    print('🛑 Navegação parada');
+    // Atualizar UI a cada 3 segundos
+    _updateTimer = Timer.periodic(Duration(seconds: 3), (timer) {
+      if (!_isNavigating || _isPaused || _currentSession == null) return;
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
+    });
+  }
+
+  void _restartPositionMonitoring() {
+    Timer(Duration(seconds: 5), () async {
+      if (_isNavigating && !_isPaused) {
+        try {
+          print('Reiniciando monitoramento de posição...');
+          await _positionStream?.cancel();
+          await _startPositionMonitoring();
+        } catch (e) {
+          print('Falha ao reiniciar monitoramento: $e');
+        }
+      }
+    });
   }
 
   void pauseNavigation() {
+    if (!_isNavigating || _isPaused) return;
+
+    print('Pausando navegação...');
+    _isPaused = true;
+    _positionStream?.pause();
+    _deviationCheckTimer?.cancel();
+    _updateTimer?.cancel();
+
     if (_currentSession != null) {
-      _currentSession!.pause();
-      print('⏸️  Navegação pausada');
+      _currentSession!.status = NavigationStatus.paused;
+      _currentSession!.lastUpdate = DateTime.now();
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
     }
+
+    print('Navegação pausada');
   }
 
   void resumeNavigation() {
+    if (!_isNavigating || !_isPaused) return;
+
+    print('Retomando navegação...');
+    _isPaused = false;
+    _positionStream?.resume();
+    _startPeriodicChecks();
+
     if (_currentSession != null) {
-      _currentSession!.resume();
-      print('▶️  Navegação retomada');
+      _currentSession!.status = NavigationStatus.inProgress;
+      _currentSession!.lastUpdate = DateTime.now();
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
     }
+
+    print('Navegação retomada');
   }
 
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    return Geolocator.distanceBetween(
-      point1.latitude,
-      point1.longitude,
-      point2.latitude,
-      point2.longitude,
-    );
+  Future<void> stopNavigation() async {
+    print('Parando navegação...');
+
+    _isNavigating = false;
+    _isPaused = false;
+
+    // Cancelar timers
+    _deviationCheckTimer?.cancel();
+    _deviationCheckTimer = null;
+
+    _updateTimer?.cancel();
+    _updateTimer = null;
+
+    // Cancelar stream
+    await _positionStream?.cancel();
+    _positionStream = null;
+
+    // Finalizar sessão
+    if (_currentSession != null) {
+      _currentSession!.status = NavigationStatus.completed;
+      _currentSession!.endTime = DateTime.now();
+      _currentSession!.lastUpdate = DateTime.now();
+
+      if (onSessionUpdate != null) {
+        onSessionUpdate!(_currentSession!);
+      }
+    }
+
+    // Limpar estado
+    _currentRoute.clear();
+    _positionHistory.clear();
+    _lastPosition = null;
+    _lastKnownHeading = null;
+
+    // Notificar término
+    if (onNavigationEnded != null) {
+      onNavigationEnded!();
+    }
+
+    print('Navegação parada');
   }
 
-  NavigationSession? get currentSession => _currentSession;
+  // Getters
   bool get isNavigating => _isNavigating;
+  bool get isPaused => _isPaused;
+  NavigationSession? get currentSession => _currentSession;
+  List<LatLng> get currentRoute => _currentRoute;
+  double? get currentHeading => _lastKnownHeading;
 }

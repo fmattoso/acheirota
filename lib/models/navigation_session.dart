@@ -1,106 +1,97 @@
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+enum NavigationStatus {
+  inProgress,
+  paused,
+  completed,
+  deviated,
+  recalculating,
+}
+
 class NavigationSession {
-  final String id;
-  final DateTime startedAt;
-  DateTime? endedAt;
-  final List<LatLng> plannedRoute;
-  List<LatLng> actualRoute = [];
-  double totalPlannedDistance; // km
-  double totalActualDistance = 0.0; // km
-  int totalPlannedDuration; // minutos
-  int totalActualDuration = 0; // minutos
-  double fuelConsumption; // km/l
-  double fuelUsed = 0.0; // litros
-  bool isActive = false;
-  bool isPaused = false;
-  double averageSpeed = 0.0; // km/h
-  double maxSpeed = 0.0; // km/h
+  final DateTime startTime;
+  DateTime? endTime;
+  final List<LatLng> routePoints;
+  final double totalDistance; // em metros
+  final Duration totalDuration;
+  final double fuelConsumption; // km/l
 
-  // Métricas de desvio
-  double maxDeviation = 0.0; // metros
-  int recalculationCount = 0;
-  DateTime? lastRecalculation;
-
-  // Status atual
+  // Estado atual
   LatLng? currentPosition;
-  double? currentSpeed; // km/h
-  double? remainingDistance; // km
-  int? remainingTime; // minutos
-  int currentDestinationIndex = 0;
+  double currentSpeed; // km/h
+  double distanceTraveled; // metros
+  double remainingDistance; // metros
+  Duration remainingDuration;
+  double averageSpeed; // km/h
+  List<LatLng> positions; // Histórico de posições
+  NavigationStatus status;
+  DateTime lastUpdate;
 
   NavigationSession({
-    required this.id,
-    required this.plannedRoute,
-    required this.totalPlannedDistance,
-    required this.totalPlannedDuration,
+    required this.startTime,
+    this.endTime,
+    required this.routePoints,
+    required this.totalDistance,
+    required this.totalDuration,
     required this.fuelConsumption,
-  }) : startedAt = DateTime.now();
+    required this.remainingDistance,
+    required this.remainingDuration,
+    this.currentPosition,
+    this.currentSpeed = 0,
+    this.distanceTraveled = 0,
+    this.averageSpeed = 0,
+    List<LatLng>? positions,
+    this.status = NavigationStatus.inProgress,
+    required this.lastUpdate,
+  }) : positions = positions ?? [];
 
-  void updatePosition(LatLng position, double speed) {
-    currentPosition = position;
-    currentSpeed = speed;
+  // Adicionar nova posição ao histórico
+  void addPosition(LatLng position) {
+    positions.add(position);
+  }
 
-    // Atualizar rota atual
-    actualRoute.add(position);
+  // Calcular consumo de combustível até o momento
+  double get fuelUsed {
+    return distanceTraveled / 1000 / fuelConsumption;
+  }
 
-    // Atualizar velocidade máxima
-    if (speed > maxSpeed) {
-      maxSpeed = speed;
-    }
+  // Calcular tempo decorrido
+  Duration get elapsedDuration {
+    return DateTime.now().difference(startTime);
+  }
 
-    // Calcular média de velocidade
-    if (actualRoute.length > 1) {
-      final totalSpeed = averageSpeed * (actualRoute.length - 1) + speed;
-      averageSpeed = totalSpeed / actualRoute.length;
+  // Calcular progresso (0.0 a 1.0)
+  double get progress {
+    if (totalDistance <= 0) return 0;
+    return (distanceTraveled / totalDistance).clamp(0.0, 1.0);
+  }
+
+  // Calcular ETA
+  DateTime get estimatedArrival {
+    return DateTime.now().add(remainingDuration);
+  }
+
+  // Formatar para exibição
+  String get formattedRemainingDistance {
+    if (remainingDistance < 1000) {
+      return '${remainingDistance.round()} m';
     } else {
-      averageSpeed = speed;
+      return '${(remainingDistance / 1000).toStringAsFixed(1)} km';
     }
   }
 
-  void addDistance(double distance) {
-    totalActualDistance += distance;
-    fuelUsed = totalActualDistance / fuelConsumption;
+  String get formattedRemainingTime {
+    final hours = remainingDuration.inHours;
+    final minutes = remainingDuration.inMinutes.remainder(60);
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}min';
+    } else {
+      return '${minutes} min';
+    }
   }
 
-  void addDuration(int duration) {
-    totalActualDuration += duration;
-  }
-
-  void recalculate() {
-    recalculationCount++;
-    lastRecalculation = DateTime.now();
-  }
-
-  void pause() {
-    isPaused = true;
-  }
-
-  void resume() {
-    isPaused = false;
-  }
-
-  void end() {
-    endedAt = DateTime.now();
-    isActive = false;
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'id': id,
-      'startedAt': startedAt.toIso8601String(),
-      'endedAt': endedAt?.toIso8601String(),
-      'totalPlannedDistance': totalPlannedDistance,
-      'totalActualDistance': totalActualDistance,
-      'totalPlannedDuration': totalPlannedDuration,
-      'totalActualDuration': totalActualDuration,
-      'fuelConsumption': fuelConsumption,
-      'fuelUsed': fuelUsed,
-      'averageSpeed': averageSpeed,
-      'maxSpeed': maxSpeed,
-      'maxDeviation': maxDeviation,
-      'recalculationCount': recalculationCount,
-      'currentDestinationIndex': currentDestinationIndex,
-    };
+  String get formattedCurrentSpeed {
+    return '${currentSpeed.round()} km/h';
   }
 }
