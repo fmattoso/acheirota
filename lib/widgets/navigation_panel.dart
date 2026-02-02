@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import '../models/navigation_session.dart';
 
 class NavigationPanel extends StatelessWidget {
@@ -18,227 +17,34 @@ class NavigationPanel extends StatelessWidget {
     required this.onStop,
   }) : super(key: key);
 
-  String _formatDuration(int minutes) {
-    final hours = minutes ~/ 60;
-    final remainingMinutes = minutes % 60;
-
-    if (hours > 0) {
-      return '${hours}h ${remainingMinutes}min';
-    }
-    return '${remainingMinutes}min';
-  }
-
-  String _formatTime(DateTime time) {
-    return DateFormat('HH:mm').format(time);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final remainingDist = session.remainingDistance ?? 0;
-    final remainingTime = session.remainingTime ?? 0;
-    final progress = session.totalActualDistance / session.totalPlannedDistance;
+    final isPaused = session.status == NavigationStatus.paused;
 
     return Positioned(
-      top: MediaQuery.of(context).padding.top + 8,
-      left: 8,
-      right: 8,
+      bottom: 20,
+      left: 20,
+      right: 20,
       child: Card(
         elevation: 8,
-        color: Colors.white.withOpacity(0.95),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Cabeçalho
-              Row(
-                children: [
-                  Icon(Icons.directions_car, color: Colors.blue),
-                  SizedBox(width: 8),
-                  Text(
-                    'NAVEGAÇÃO ATIVA',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[800],
-                    ),
-                  ),
-                  Spacer(),
-                  _buildStatusIndicator(),
-                  SizedBox(width: 8),
-                  IconButton(
-                    icon: Icon(Icons.close, size: 18),
-                    onPressed: onStop,
-                    tooltip: 'Parar navegação',
-                  ),
-                ],
-              ),
+              // Cabeçalho com status
+              _buildHeader(isPaused),
+              SizedBox(height: 16),
 
-              Divider(height: 16),
+              // Informações da navegação
+              _buildNavigationInfo(),
+              SizedBox(height: 16),
 
-              // Informações principais
-              Row(
-                children: [
-                  // Velocidade atual
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text(
-                          '${currentSpeed.toStringAsFixed(0)}',
-                          style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: _getSpeedColor(currentSpeed),
-                          ),
-                        ),
-                        Text(
-                          'km/h',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Distância e tempo
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Icon(Icons.flag, size: 14, color: Colors.green),
-                            SizedBox(width: 4),
-                            Text(
-                              '${remainingDist.toStringAsFixed(1)} km',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Icon(Icons.timer, size: 14, color: Colors.orange),
-                            SizedBox(width: 4),
-                            Text(
-                              _formatDuration(remainingTime),
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.orange[700],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              SizedBox(height: 12),
-
-              // Barra de progresso
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Progresso',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      Text(
-                        '${(progress * 100).toStringAsFixed(1)}%',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  LinearProgressIndicator(
-                    value: progress,
-                    backgroundColor: Colors.grey[200],
-                    color: Colors.blue,
-                    minHeight: 6,
-                  ),
-                  SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '${session.totalActualDistance.toStringAsFixed(1)} km',
-                        style: TextStyle(fontSize: 10),
-                      ),
-                      Text(
-                        '${session.totalPlannedDistance.toStringAsFixed(1)} km',
-                        style: TextStyle(fontSize: 10),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-
-              SizedBox(height: 12),
-
-              // Métricas secundárias
-              Row(
-                children: [
-                  _buildMetricItem(
-                    icon: Icons.local_gas_station,
-                    value: '${session.fuelUsed.toStringAsFixed(1)} L',
-                    label: 'Combustível',
-                  ),
-                  Spacer(),
-                  _buildMetricItem(
-                    icon: Icons.speed,
-                    value: '${session.averageSpeed.toStringAsFixed(0)} km/h',
-                    label: 'Média',
-                  ),
-                  Spacer(),
-                  _buildMetricItem(
-                    icon: Icons.timer,
-                    value: _formatTime(session.startedAt),
-                    label: 'Início',
-                  ),
-                  Spacer(),
-                  if (session.recalculationCount > 0)
-                    _buildMetricItem(
-                      icon: Icons.refresh,
-                      value: '${session.recalculationCount}x',
-                      label: 'Recalculos',
-                      color: Colors.orange,
-                    ),
-                ],
-              ),
-
-              // Botões de controle
-              if (session.isPaused)
-                SizedBox(height: 12),
-              if (session.isPaused)
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: onResume,
-                    icon: Icon(Icons.play_arrow),
-                    label: Text('RETOMAR NAVEGAÇÃO'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                    ),
-                  ),
-                ),
+              // Controles de navegação
+              _buildControls(isPaused),
             ],
           ),
         ),
@@ -246,71 +52,262 @@ class NavigationPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusIndicator() {
-    Color color;
-    IconData icon;
-    String tooltip;
-
-    if (session.isPaused) {
-      color = Colors.orange;
-      icon = Icons.pause;
-      tooltip = 'Pausado';
-    } else {
-      color = Colors.green;
-      icon = Icons.play_arrow;
-      tooltip = 'Em andamento';
-    }
-
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        padding: EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, size: 14, color: color),
-      ),
-    );
-  }
-
-  Widget _buildMetricItem({
-    required IconData icon,
-    required String value,
-    required String label,
-    Color color = Colors.blue,
-  }) {
-    return Column(
+  Widget _buildHeader(bool isPaused) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Row(
           children: [
-            Icon(icon, size: 14, color: color),
-            SizedBox(width: 4),
+            Icon(
+              Icons.navigation,
+              color: isPaused ? Colors.orange : Colors.blue,
+              size: 24,
+            ),
+            SizedBox(width: 8),
             Text(
-              value,
+              isPaused ? 'Navegação Pausada' : 'Em Navegação',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 18,
                 fontWeight: FontWeight.bold,
+                color: isPaused ? Colors.orange : Colors.blue,
               ),
             ),
           ],
         ),
-        SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            color: Colors.grey[600],
+        // Heading atual
+        if (session.currentHeading != null)
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.blue[100]!),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.explore,
+                  size: 16,
+                  color: Colors.blue,
+                ),
+                SizedBox(width: 4),
+                Text(
+                  session.formattedCurrentHeading,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
 
-  Color _getSpeedColor(double speed) {
-    if (speed < 40) return Colors.blue;
-    if (speed < 80) return Colors.green;
-    if (speed < 100) return Colors.orange;
-    return Colors.red;
+  Widget _buildNavigationInfo() {
+    return Column(
+      children: [
+        // Velocidade atual
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildInfoItem(
+              icon: Icons.speed,
+              label: 'Velocidade',
+              value: '${currentSpeed.round()} km/h',
+              color: Colors.green,
+            ),
+            _buildInfoItem(
+              icon: Icons.timelapse,
+              label: 'Tempo Restante',
+              value: session.formattedRemainingTime,
+              color: Colors.blue,
+            ),
+          ],
+        ),
+        SizedBox(height: 12),
+
+        // Distância
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildInfoItem(
+              icon: Icons.linear_scale,
+              label: 'Distância Restante',
+              value: session.formattedRemainingDistance,
+              color: Colors.orange,
+            ),
+            _buildInfoItem(
+              icon: Icons.flag,
+              label: 'Percorrido',
+              value: '${(session.distanceTraveled / 1000).toStringAsFixed(1)} km',
+              color: Colors.purple,
+            ),
+          ],
+        ),
+        SizedBox(height: 12),
+
+        // Progresso
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Progresso',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                Text(
+                  '${(session.progress * 100).toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 4),
+            LinearProgressIndicator(
+              value: session.progress,
+              backgroundColor: Colors.grey[200],
+              valueColor: AlwaysStoppedAnimation<Color>(
+                session.progress > 0.8 ? Colors.green : Colors.blue,
+              ),
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ],
+        ),
+
+        // Combustível (se disponível)
+        if (session.fuelConsumption > 0)
+          Column(
+            children: [
+              SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildInfoItem(
+                    icon: Icons.local_gas_station,
+                    label: 'Combustível',
+                    value: '${session.fuelUsed.toStringAsFixed(1)} L',
+                    color: Colors.red,
+                  ),
+                  _buildInfoItem(
+                    icon: Icons.ev_station,
+                    label: 'Consumo',
+                    value: '${session.fuelConsumption.toStringAsFixed(1)} km/L',
+                    color: Colors.teal,
+                  ),
+                ],
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildInfoItem({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Expanded(
+      child: Container(
+        margin: EdgeInsets.symmetric(horizontal: 4),
+        padding: EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: color),
+                SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: color,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 4),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControls(bool isPaused) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        // Botão Parar
+        ElevatedButton(
+          onPressed: onStop,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red,
+            foregroundColor: Colors.white,
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.stop, size: 20),
+              SizedBox(width: 8),
+              Text('Parar'),
+            ],
+          ),
+        ),
+
+        // Botão Pausar/Retomar
+        ElevatedButton(
+          onPressed: isPaused ? onResume : onPause,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: isPaused ? Colors.green : Colors.orange,
+            foregroundColor: Colors.white,
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(isPaused ? Icons.play_arrow : Icons.pause, size: 20),
+              SizedBox(width: 8),
+              Text(isPaused ? 'Retomar' : 'Pausar'),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
