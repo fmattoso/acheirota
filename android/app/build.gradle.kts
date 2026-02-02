@@ -5,16 +5,6 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Carregar propriedades do local.properties
-val localProperties = Properties()
-val localPropertiesFile = rootProject.file("local.properties")
-if (localPropertiesFile.exists()) {
-    localProperties.load(localPropertiesFile.inputStream())
-}
-
-// Obter a chave do Google Maps
-val mapsApiKey = localProperties.getProperty("mapsApiKey") 
-
 android {
     namespace = "com.brdata.acheirota"
     compileSdk = flutter.compileSdkVersion
@@ -26,7 +16,7 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
+        jvmTarget = "17"
     }
 
     defaultConfig {
@@ -39,11 +29,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // Passar a chave para o AndroidManifest
-        manifestPlaceholders["mapsApiKey"] = mapsApiKey
-
-        // Também disponível como build config
-        buildConfigField("String", "\"$mapsApiKey\"")
+        // Define o placeholder que será usado no manifesto
+        val localProperties = new Properties()
+        localProperties.load(new FileInputStream(rootProject.file("local.properties")))
+        manifestPlaceholders = [mapsApiKey: localProperties.getProperty("mapsApiKey")]
    }
 
     buildTypes {
@@ -51,12 +40,6 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
-
-            // Para release, você pode querer uma chave diferente
-            // manifestPlaceholders["mapsApiKey"] = "SUA_CHAVE_RELEASE"
-        }
-        debug {
-            manifestPlaceholders["mapsApiKey"] = mapsApiKey
         }
     }
 }
