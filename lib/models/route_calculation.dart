@@ -3,7 +3,7 @@ import 'destination.dart';
 class RouteCalculation {
   final List<Destination> destinations;
   final double totalDistance; // em km
-  final int totalDuration; // em minutos
+  final Duration totalDuration; // em minutos
   final double fuelRequired; // em litros
   final DateTime calculatedAt;
 

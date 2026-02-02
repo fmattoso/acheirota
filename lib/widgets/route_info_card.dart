@@ -16,9 +16,9 @@ class RouteInfoCard extends StatelessWidget {
     this.onNavigate, // ADICIONE ESTA LINHA
   }) : super(key: key);
 
-  String _formatDuration(int minutes) {
+  String _formatDuration(Duration minutes) {
     final hours = minutes ~/ 60;
-    final remainingMinutes = minutes % 60;
+    final remainingMinutes = minutes / 60;
 
     if (hours > 0) {
       return '${hours}h ${remainingMinutes}min';

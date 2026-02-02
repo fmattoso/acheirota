@@ -262,7 +262,7 @@ class _DestinationsScreenState extends State<DestinationsScreen> {
       final routeCalculation = RouteCalculation(
         destinations: (result['destinations'] as List).cast<Destination>(),
         totalDistance: totalDistance,
-        totalDuration: (result['travelDuration'] as num).toInt(),
+        totalDuration: result['travelDuration'],
         fuelRequired: fuelRequired,
         calculatedAt: DateTime.now(),
       );
