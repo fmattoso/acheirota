@@ -1,3 +1,4 @@
+import 'package:acheirota/config/api_keys.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
@@ -11,18 +12,17 @@ import '../services/geocoding_autocomplete_service.dart';
 import '../widgets/destination_item.dart';
 import '../widgets/improved_autocomplete_field.dart';
 
-const kGoogleApiKey = "";
-
 class DestinationsScreen extends StatefulWidget {
   @override
   _DestinationsScreenState createState() => _DestinationsScreenState();
 }
 
 class _DestinationsScreenState extends State<DestinationsScreen> {
+  final googleApiKey = ApiKeys.googleMapsApiKey;
   final LocationService _locationService = LocationService();
-  final DirectionsService _directionsService = DirectionsService(kGoogleApiKey);
-  final GeocodingAutocompleteService _autocompleteService =
-  GeocodingAutocompleteService(kGoogleApiKey);
+  late final DirectionsService _directionsService = DirectionsService(googleApiKey);
+  late final GeocodingAutocompleteService _autocompleteService =
+  GeocodingAutocompleteService(googleApiKey);
 
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _labelController = TextEditingController();

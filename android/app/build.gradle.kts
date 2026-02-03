@@ -1,3 +1,8 @@
+import com.android.build.gradle.internal.dsl.BaseFlavor
+import java.util.Properties
+import java.io.FileInputStream
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -15,8 +20,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    // O novo bloco deve ficar dentro de 'android'
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17) // Use o enum correspondente à sua versão
+        }
     }
 
     defaultConfig {
@@ -29,11 +37,20 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // Define o placeholder que será usado no manifesto
-        val localProperties = new Properties()
-        localProperties.load(new FileInputStream(rootProject.file("local.properties")))
-        manifestPlaceholders = [mapsApiKey: localProperties.getProperty("mapsApiKey")]
-   }
+        // Leitura do local.properties
+        val localPropertiesFile = rootProject.file("local.properties")
+        val localProperties = Properties()
+        if (localPropertiesFile.exists()) {
+            localProperties.load(FileInputStream(localPropertiesFile))
+        }
+
+        // Adiciona ao mapa existente em vez de reatribuir
+        manifestPlaceholders.putAll(
+            mapOf(
+                "mapsApiKey" to (localProperties.getProperty("mapsApiKey") ?: "")
+            )
+        )
+    }
 
     buildTypes {
         release {
